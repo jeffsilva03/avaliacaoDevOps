@@ -8,16 +8,16 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: avaliacaodevops
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/avaliacaodevops
 
 jobs:
-  # CI: Integração Contínua 
+  # CI: Integração Contínua
   ci:
-    name: CI - Validar, Build e Testar
+    name: CI - Validar, Build, Testar e Publicar
     runs-on: ubuntu-latest
     steps:
       - name: Baixar código do repositório
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validar arquivos do projeto
         run: |
@@ -29,24 +29,37 @@ jobs:
           echo "Validação OK"
 
       - name: Build da imagem Docker
-        run: docker build -t $IMAGE_NAME:${{ github.sha }} .
+        run: docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
 
       - name: Testar container (smoke test)
         run: |
-          docker run -d --name teste -p 8080:80 $IMAGE_NAME:${{ github.sha }}
+          docker run -d --name teste -p 8080:80 $IMAGE:${{ github.sha }}
           sleep 5
           curl -fsS http://localhost:8080 | grep -q "INSTANCE_LABEL"
           echo "Container respondeu corretamente"
           docker rm -f teste
 
-  # CD: Deploy Contínuo
+      - name: Login no Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publicar imagem no Docker Hub
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+  # CD: Entrega/Deploy Contínuo
   cd:
     name: CD - Deploy na EC2
     needs: ci
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH na EC2
+      - name: Deploy via SSH na EC2 (pull da imagem do Docker Hub)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -54,14 +67,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd ~/avaliacaoDevOps
-            git pull origin main
-            docker build -t avaliacaodevops:latest .
+            docker pull ${{ env.IMAGE }}:${{ github.sha }}
             docker rm -f avaliacaodevops || true
-            docker run -d --name avaliacaodevops --restart always -p 80:80 avaliacaodevops:latest
+            docker run -d --name avaliacaodevops --restart always -p 80:80 ${{ env.IMAGE }}:${{ github.sha }}
+            docker image prune -f
             sleep 5
             curl -fsS http://localhost/ > /dev/null
-            echo "Deploy concluído - commit ${{ github.sha }}"
+            echo "Deploy concluído - imagem ${{ env.IMAGE }}:${{ github.sha }}"
 
       - name: Verificar página publicada
         run: curl -fsS http://${{ secrets.EC2_HOST }}/ > /dev/null && echo "Página no ar"
