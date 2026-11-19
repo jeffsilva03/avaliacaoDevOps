@@ -9,7 +9,7 @@ com deploy automatizado.
 ## Arquitetura
 - **GitHub**: versionamento do código
 - **Docker**: imagem `nginx:alpine` com a página (ver `Dockerfile`)
+- **Docker Hub**: registro da imagem (`latest` + tag com o hash do commit)
 - **GitHub Actions** (`.github/workflows/cicd.yml`):
-  - **CI**: valida os arquivos, faz o build da imagem e testa o container
-  - **CD**: só roda se o CI passar; acessa a EC2 via SSH, atualiza o código,
-    reconstrói a imagem e sobe o container na porta 80
+  - **CI**: valida os arquivos, faz o build da imagem, testa o container e publica no Docker Hub
+  - **CD**: só roda se o CI passar; acessa a EC2 via SSH, baixa a imagem do Docker Hub e sobe o container na porta 80
