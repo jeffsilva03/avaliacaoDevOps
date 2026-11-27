@@ -2,16 +2,19 @@ name: CI/CD - avaliacaoDevOps (Case 5 AguaViva)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 env:
   IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/avaliacaodevops
+  AMBIENTE: ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
+  CANAL: ${{ github.ref_name == 'main' && 'latest' || 'dev' }}
+  VERSAO: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}-${{ github.sha }}
 
 jobs:
-  # CI: Integração Contínua
+  # CI: Integração Contínua 
   ci:
     name: CI - Validar, Build, Testar e Publicar
     runs-on: ubuntu-latest
@@ -28,12 +31,17 @@ jobs:
           grep -q "INSTANCE_LABEL" index.html   || (echo "INSTANCE_LABEL ausente" && exit 1)
           echo "Validação OK"
 
+      - name: Marcar o ambiente na página (DEV ou PROD)
+        run: |
+          sed -i "s/const INSTANCE_LABEL = \"/const INSTANCE_LABEL = \"$AMBIENTE - /" index.html
+          grep "const INSTANCE_LABEL" index.html
+
       - name: Build da imagem Docker
-        run: docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+        run: docker build -t $IMAGE:$VERSAO -t $IMAGE:$CANAL .
 
       - name: Testar container (smoke test)
         run: |
-          docker run -d --name teste -p 8080:80 $IMAGE:${{ github.sha }}
+          docker run -d --name teste -p 8080:80 $IMAGE:$VERSAO
           sleep 5
           curl -fsS http://localhost:8080 | grep -q "INSTANCE_LABEL"
           echo "Container respondeu corretamente"
@@ -49,17 +57,18 @@ jobs:
       - name: Publicar imagem no Docker Hub
         if: github.event_name != 'pull_request'
         run: |
-          docker push $IMAGE:${{ github.sha }}
-          docker push $IMAGE:latest
+          docker push $IMAGE:$VERSAO
+          docker push $IMAGE:$CANAL
 
-  # CD: Entrega/Deploy Contínuo
+  #  CD: Deploy no ambiente da branch 
   cd:
-    name: CD - Deploy na EC2
+    name: CD - Deploy ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
     needs: ci
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'producao' || 'desenvolvimento' }}
     steps:
-      - name: Deploy via SSH na EC2 (pull da imagem do Docker Hub)
+      - name: Deploy via SSH na EC2 do ambiente
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -67,13 +76,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            docker pull ${{ env.IMAGE }}:${{ github.sha }}
+            docker pull ${{ env.IMAGE }}:${{ env.VERSAO }}
             docker rm -f avaliacaodevops || true
-            docker run -d --name avaliacaodevops --restart always -p 80:80 ${{ env.IMAGE }}:${{ github.sha }}
+            docker run -d --name avaliacaodevops --restart always -p 80:80 ${{ env.IMAGE }}:${{ env.VERSAO }}
             docker image prune -f
             sleep 5
             curl -fsS http://localhost/ > /dev/null
-            echo "Deploy concluído - imagem ${{ env.IMAGE }}:${{ github.sha }}"
+            echo "Deploy ${{ env.AMBIENTE }} concluído - imagem ${{ env.IMAGE }}:${{ env.VERSAO }}"
 
       - name: Verificar página publicada
-        run: curl -fsS http://${{ secrets.EC2_HOST }}/ > /dev/null && echo "Página no ar"
+        run: curl -fsS http://${{ secrets.EC2_HOST }}/ > /dev/null && echo "Página ${{ env.AMBIENTE }} no ar"
